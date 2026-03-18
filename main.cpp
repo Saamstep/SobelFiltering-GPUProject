@@ -1,6 +1,6 @@
+#include <opencv2/opencv.hpp>
 #include <iostream>
 #include <chrono>
-#include <opencv2/opencv.hpp>
 #include "sobel.hpp"
 
 int main(int argc, char **argv)
@@ -18,7 +18,6 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // Convert to grayscale
     cv::Mat gray;
     if (img.channels() > 1)
         cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
@@ -27,32 +26,36 @@ int main(int argc, char **argv)
 
     SobelProcessor processor;
 
-    // --- 3x3 Sobel ---
-    cv::Mat result3x3(gray.size(), gray.type());
-    auto start3x3 = std::chrono::high_resolution_clock::now();
-    processor.sobel_cpu<3>(gray.data, result3x3.data, gray.cols, gray.rows);
-    auto end3x3 = std::chrono::high_resolution_clock::now();
-    std::cout << "CPU 3x3 Sobel Time: "
-              << std::chrono::duration<double, std::milli>(end3x3 - start3x3).count()
-              << " ms\n";
+    // --- CPU 3x3 ---
+    cv::Mat cpu3(gray.size(), gray.type());
+    auto t1 = std::chrono::high_resolution_clock::now();
+    processor.sobel_cpu<3>(gray.data, cpu3.data, gray.cols, gray.rows);
+    auto t2 = std::chrono::high_resolution_clock::now();
+    std::cout << "CPU 3x3: " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms\n";
 
-    // --- 5x5 Sobel ---
-    cv::Mat result5x5(gray.size(), gray.type());
-    auto start5x5 = std::chrono::high_resolution_clock::now();
-    processor.sobel_cpu<5>(gray.data, result5x5.data, gray.cols, gray.rows);
-    auto end5x5 = std::chrono::high_resolution_clock::now();
-    std::cout << "CPU 5x5 Sobel Time: "
-              << std::chrono::duration<double, std::milli>(end5x5 - start5x5).count()
-              << " ms\n";
+    // --- CPU 5x5 ---
+    cv::Mat cpu5(gray.size(), gray.type());
+    t1 = std::chrono::high_resolution_clock::now();
+    processor.sobel_cpu<5>(gray.data, cpu5.data, gray.cols, gray.rows);
+    t2 = std::chrono::high_resolution_clock::now();
+    std::cout << "CPU 5x5: " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms\n";
 
-    // Show results
-    cv::imshow("Input", img);
-    cv::imshow("Sobel 3x3", result3x3);
-    cv::imshow("Sobel 5x5", result5x5);
+#ifdef WIN32
+    // --- CUDA Naive 3x3 ---
+    cv::Mat cuda3(gray.size(), gray.type());
+    processor.sobel_cuda_naive(gray.data, cuda3.data, gray.cols, gray.rows, 3);
 
-    cv::imwrite("sobel_3x3.png", result3x3);
-    cv::imwrite("sobel_5x5.png", result5x5);
+    // --- CUDA Shared 5x5 ---
+    cv::Mat cuda5(gray.size(), gray.type());
+    processor.sobel_cuda_shared(gray.data, cuda5.data, gray.cols, gray.rows, 5);
 
+    cv::imshow("CUDA 3x3", cuda3);
+    cv::imshow("CUDA 5x5", cuda5);
+#endif
+
+    cv::imshow("CPU 3x3", cpu3);
+    cv::imshow("CPU 5x5", cpu5);
     cv::waitKey(0);
+
     return 0;
 }
