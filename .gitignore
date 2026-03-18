@@ -1,0 +1,8 @@
+build
+.ninja*
+*.png
+*.o
+*.jpg
+*.obj
+*.so
+*.exe
