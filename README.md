@@ -1,54 +1,150 @@
-# Custom Sobel Filtering: CPU vs. CUDA Performance Analysis
+# Sobel Filtering: CPU and CUDA
 
-A high-performance C++/CUDA implementation of the Sobel Edge Detection operator. This project provides a common interface to compare various hardware targets, ranging from sequential CPU execution to optimized "Windowed" GPU kernels.
+This project compares a CPU Sobel implementation against two CUDA versions:
 
-## 🎯 Project Goals
-* **Implement** the Sobel gradient algorithm ($G = \sqrt{G_x^2 + G_y^2}$) from scratch.
-* **Compare** performance across three distinct targets:
-    1. **CPU**: Sequential baseline (Single-threaded).
-    2. **CUDA Naive**: Parallel batch processing (Global Memory).
-    3. **CUDA Tiled**: Windowed optimization (Shared Memory/Multiprocessing).
-* **Analyze** memory bandwidth bottlenecks and PCIe transfer overhead.
+- CPU Sobel with 3x3 and 5x5 kernels
+- CUDA naive Sobel using global memory
+- CUDA shared-memory Sobel using a tiled shared buffer
 
----
+The application loads an image with OpenCV, converts it to grayscale, runs the available Sobel paths, prints timing to the terminal, and displays the results in OpenCV windows.
 
-## 🛠 Requirements
+## Current Status
 
-### System Dependencies
-* **OS**: Linux (Ubuntu 20.04+) or Windows 10/11.
-* **GPU**: NVIDIA GPU with Compute Capability 6.0+ (Pascal or newer).
-* **Drivers**: NVIDIA Driver supporting CUDA 11.0+.
+Implemented now:
 
-### Toolchain
-| Requirement | Recommended Version | Purpose |
-| :--- | :--- | :--- |
-| **CMake** | 3.18+ | Build system & cross-platform config |
-| **GCC/G++** | 9.0+ | Host (CPU) compiler |
-| **CUDA Toolkit** | 11.0+ | `nvcc` compiler & GPU libraries |
-| **OpenCV** | 4.x | Image I/O and visualization |
+- `sobel_cpu` executable
+- `sobel_gpu` executable
+- CPU 3x3 timing with `std::chrono`
+- CPU 5x5 timing with `std::chrono`
+- CUDA naive 3x3 timing with `std::chrono`
+- CUDA shared 5x5 timing with `std::chrono`
+- CUDA runtime error reporting in the host wrappers
+- Post-build copy of required OpenCV DLLs on Windows
 
----
+Notes:
 
-## 📂 Implementation Details
+- `sobel_cpu` is CPU-only and does not compile or link CUDA code.
+- `sobel_gpu` compiles `main.cpp` and `sobel.cu`, and enables the CUDA code path with `SOBEL_ENABLE_CUDA`.
+- The current GPU timings include host-to-device copy, kernel launch, synchronization, and device-to-host copy. They are end-to-end timings, not kernel-only timings.
 
-### 1. CPU Baseline
-The CPU implementation focuses on **Cache Locality**. By traversing pixels in row-major order, we minimize L1 cache misses.
+## Project Files
 
+- `main.cpp`: image loading, grayscale conversion, timing, and display
+- `sobel.hpp`: CPU Sobel templates and the `SobelProcessor` interface
+- `sobel.cu`: CUDA kernels and host wrapper functions
+- `CMakeLists.txt`: build configuration for CPU and GPU targets
 
-### 2. CUDA Naive (Batch Processing)
-Maps one thread to every pixel. This version is simple but limited by **Global Memory Bandwidth**, as each thread fetches 9 neighboring pixels from high-latency VRAM.
+## Requirements
 
-### 3. CUDA Tiled (Windowed Optimization)
-This version treats the GPU cores as a multiprocessing grid. It loads a "Window" (e.g., $16 \times 16$ or $32 \times 32$) of pixels into **Shared Memory** (on-chip L1 cache).
-* **Rangeable Window Sizes**: Supports testing different block dimensions to find the "sweet spot" for occupancy.
-* **Reduced Redundancy**: Neighboring threads share pixel data, reducing global VRAM requests by up to 90%.
+Windows is the actively configured platform in the current build.
 
+- CMake 3.18+
+- Visual Studio with MSVC
+- OpenCV 4.x
+- NVIDIA CUDA Toolkit
+- NVIDIA GPU and compatible driver for the CUDA target
 
----
+The current CMake setup expects OpenCV at:
 
-## 🚀 Building the Project
+```text
+C:/opencv/build
+```
 
-1. **Configure**:
-   ```bash
-   mkdir build && cd build
-   cmake ..
+Specifically, the Windows config uses:
+
+```text
+C:/opencv/build/x64/vc16/lib
+```
+
+## Build
+
+Configure:
+
+```powershell
+& cmake -S . -B build -D CMAKE_CUDA_ARCHITECTURES=120
+```
+
+Build CPU target:
+
+```powershell
+& cmake --build build --config Release --target sobel_cpu
+```
+
+Build GPU target:
+
+```powershell
+& cmake --build build --config Release --target sobel_gpu
+```
+
+Notes:
+
+- The project copies OpenCV runtime DLLs into the target output directory after build on Windows.
+- `CMAKE_CUDA_ARCHITECTURES` should match the installed GPU. The current working configuration on this machine is `120`.
+
+## Run
+
+CPU:
+
+```powershell
+.\build\Release\sobel_cpu.exe <image-path>
+```
+
+GPU:
+
+```powershell
+.\build\Release\sobel_gpu.exe <image-path>
+```
+
+Expected behavior:
+
+- The program prints timing results in the terminal.
+- The program opens OpenCV display windows.
+- The application waits on `cv::waitKey(0)`.
+
+Current display behavior:
+
+- `sobel_cpu` shows `CPU 3x3` and `CPU 5x5`
+- `sobel_gpu` currently runs the CUDA paths and prints their timings, but `main.cpp` currently only displays the CPU result windows
+
+## Timing
+
+The current timings are measured in `main.cpp` with `std::chrono`.
+
+Measured now:
+
+- CPU 3x3
+- CPU 5x5
+- CUDA naive 3x3
+- CUDA shared 5x5
+
+The CUDA timings are total call times from the host side. If kernel-only timing is needed, CUDA events should be added inside the CUDA path instead of relying on `std::chrono` around the wrapper calls.
+
+## CUDA Implementation Notes
+
+Current CUDA implementation details:
+
+- CUDA naive kernel launches one thread per pixel
+- CUDA shared kernel loads a tile plus halo region into shared memory
+- Both CUDA wrappers allocate device buffers, copy input to device, launch the kernel, synchronize, copy output back, and free memory
+- CUDA wrapper functions now check launch and runtime errors and print failure messages to the terminal
+
+## Limitations
+
+- The project is currently configured around a Windows + Visual Studio + OpenCV + CUDA workflow
+- OpenCV path detection is not generalized yet
+- CUDA timings are not kernel-only
+- There is no automated test suite in the repository
+- The current application processes a single input image per run
+
+## Output
+
+Successful runs print lines similar to:
+
+```text
+CPU 3x3: 1.23 ms
+CPU 5x5: 2.45 ms
+CUDA Naive 3x3: 0.80 ms
+CUDA Shared 5x5: 0.62 ms
+```
+
+If a CUDA launch fails, the program now prints the CUDA error message to help diagnose architecture, driver, or runtime issues.

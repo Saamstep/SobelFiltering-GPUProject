@@ -2,9 +2,32 @@
 #include "sobel.hpp"
 #include <cuda_runtime.h>
 #include <iostream>
+#include <stdexcept>
+
+/* ------------------------------
+* HELPER FUNCTIONS
+  --------------------------------- */
+namespace
+{
+    /// @brief Had a lot of issues with parsing errors. This was suggested by AI in order to get error logs. Otherwise stdout would be completely blank!
+    /// @param err
+    /// @param msg
+    void cuda_assert(cudaError_t err, const char *msg)
+    {
+        if (err != cudaSuccess)
+        {
+            std::cerr << msg << " failed: " << cudaGetErrorString(err) << '\n';
+            throw std::runtime_error(msg);
+        }
+    }
+}
+
+/* ------------------------------
+* KERNEL FUNCTIONS
+  --------------------------------- */
 
 // Simple 1D index for naive kernel
-__global__ void sobel_kernel_naive(unsigned char *in, unsigned char *out, int w, int h, int K)
+__global__ void kernel_naive(unsigned char *in, unsigned char *out, int w, int h, int K)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -41,9 +64,9 @@ __global__ void sobel_kernel_naive(unsigned char *in, unsigned char *out, int w,
     }
 }
 
-__global__ void sobel_kernel_shared(unsigned char *in, unsigned char *out, int w, int h, int K)
+__global__ void kernel_shared(unsigned char *in, unsigned char *out, int w, int h, int K)
 {
-    // Shared memory version (simple)
+    // Shared memory version
     extern __shared__ unsigned char sdata[];
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -105,39 +128,44 @@ __global__ void sobel_kernel_shared(unsigned char *in, unsigned char *out, int w
 // Host wrappers
 void SobelProcessor::sobel_cuda_naive(unsigned char *in, unsigned char *out, int w, int h, int K)
 {
-    unsigned char *d_in, *d_out;
+    unsigned char *d_in = nullptr, *d_out = nullptr;
     size_t size = w * h * sizeof(unsigned char);
-    cudaMalloc(&d_in, size);
-    cudaMalloc(&d_out, size);
+    cuda_assert(cudaMalloc(&d_in, size), "cudaMalloc(d_in)");
+    cuda_assert(cudaMalloc(&d_out, size), "cudaMalloc(d_out)");
 
-    cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice);
+    cuda_assert(cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
+    cuda_assert(cudaMemset(d_out, 0, size), "cudaMemset(d_out)");
 
     dim3 block(16, 16);
     dim3 grid((w + 15) / 16, (h + 15) / 16);
-    sobel_kernel_naive<<<grid, block>>>(d_in, d_out, w, h, K);
-    cudaDeviceSynchronize();
+    kernel_naive<<<grid, block>>>(d_in, d_out, w, h, K);
+    cuda_assert(cudaGetLastError(), "sobel_kernel_naive launch");
+    cuda_assert(cudaDeviceSynchronize(), "sobel_kernel_naive sync");
 
-    cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost);
+    cuda_assert(cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
     cudaFree(d_in);
     cudaFree(d_out);
 }
 
 void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K)
 {
-    unsigned char *d_in, *d_out;
+    unsigned char *d_in = nullptr, *d_out = nullptr;
     size_t size = w * h * sizeof(unsigned char);
-    cudaMalloc(&d_in, size);
-    cudaMalloc(&d_out, size);
+    cuda_assert(cudaMalloc(&d_in, size), "cudaMalloc(d_in)");
+    cuda_assert(cudaMalloc(&d_out, size), "cudaMalloc(d_out)");
 
-    cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice);
+    cuda_assert(cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
+    cuda_assert(cudaMemset(d_out, 0, size), "cudaMemset(d_out)");
 
     dim3 block(16, 16);
     dim3 grid((w + 15) / 16, (h + 15) / 16);
-    size_t shared_mem = (16 + K) * (16 + K) * sizeof(unsigned char);
-    sobel_kernel_shared<<<grid, block, shared_mem>>>(d_in, d_out, w, h, K);
-    cudaDeviceSynchronize();
+    int radius = K / 2;
+    size_t shared_mem = (block.x + 2 * radius) * (block.y + 2 * radius) * sizeof(unsigned char);
+    kernel_shared<<<grid, block, shared_mem>>>(d_in, d_out, w, h, K);
+    cuda_assert(cudaGetLastError(), "sobel_kernel_shared launch");
+    cuda_assert(cudaDeviceSynchronize(), "sobel_kernel_shared sync");
 
-    cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost);
+    cuda_assert(cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
     cudaFree(d_in);
     cudaFree(d_out);
 }

@@ -63,8 +63,8 @@ public:
         }
     }
 
-#ifdef WIN32 // Lock to windows only systems - assume they have CUDA support
-    void SobelProcessor::sobel_cuda_naive(unsigned char *in, unsigned char *out, int w, int h, int K);
-    void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K);
+#ifdef SOBEL_ENABLE_CUDA
+    void sobel_cuda_naive(unsigned char *in, unsigned char *out, int w, int h, int K);
+    void sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K);
 #endif
 };
