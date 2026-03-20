@@ -3,7 +3,7 @@
 This project compares a CPU Sobel implementation against two CUDA versions:
 
 - CPU Sobel with 3x3 and 5x5 kernels
-- CUDA naive Sobel using global memory
+- CUDA global Sobel using global memory
 - CUDA shared-memory Sobel using a tiled shared buffer
 
 The application loads an image with OpenCV, converts it to grayscale, runs the available Sobel paths, prints timing to the terminal, and displays the results in OpenCV windows.
@@ -16,7 +16,7 @@ Implemented now:
 - `sobel_gpu` executable
 - CPU 3x3 timing with `std::chrono`
 - CPU 5x5 timing with `std::chrono`
-- CUDA naive 3x3 timing with `std::chrono`
+- CUDA global 3x3 timing with `std::chrono`
 - CUDA shared 5x5 timing with `std::chrono`
 - CUDA runtime error reporting in the host wrappers
 - Post-build copy of required OpenCV DLLs on Windows
@@ -61,7 +61,7 @@ C:/opencv/build/x64/vc16/lib
 Configure:
 
 ```powershell
-& cmake -S . -B build -D CMAKE_CUDA_ARCHITECTURES=120
+& cmake -S . -B build -D SOBEL_CUDA_ARCHITECTURES=120-real
 ```
 
 Build CPU target:
@@ -79,7 +79,8 @@ Build GPU target:
 Notes:
 
 - The project copies OpenCV runtime DLLs into the target output directory after build on Windows.
-- `CMAKE_CUDA_ARCHITECTURES` should match the installed GPU. The current working configuration on this machine is `120`.
+- `SOBEL_CUDA_ARCHITECTURES` should match the installed GPU. The current working configuration on this machine is `120-real` for an RTX 5080.
+- If a build targets an older architecture such as `75`, the CUDA runtime may fall back to PTX JIT and fail with `the provided PTX was compiled with an unsupported toolchain` when the driver is older than the toolkit.
 
 ## Run
 
@@ -114,7 +115,7 @@ Measured now:
 
 - CPU 3x3
 - CPU 5x5
-- CUDA naive 3x3
+- CUDA global 3x3
 - CUDA shared 5x5
 
 The CUDA timings are total call times from the host side. If kernel-only timing is needed, CUDA events should be added inside the CUDA path instead of relying on `std::chrono` around the wrapper calls.
@@ -123,7 +124,7 @@ The CUDA timings are total call times from the host side. If kernel-only timing 
 
 Current CUDA implementation details:
 
-- CUDA naive kernel launches one thread per pixel
+- CUDA global kernel launches one thread per pixel
 - CUDA shared kernel loads a tile plus halo region into shared memory
 - Both CUDA wrappers allocate device buffers, copy input to device, launch the kernel, synchronize, copy output back, and free memory
 - CUDA wrapper functions now check launch and runtime errors and print failure messages to the terminal
@@ -143,7 +144,7 @@ Successful runs print lines similar to:
 ```text
 CPU 3x3: 1.23 ms
 CPU 5x5: 2.45 ms
-CUDA Naive 3x3: 0.80 ms
+CUDA Global 3x3: 0.80 ms
 CUDA Shared 5x5: 0.62 ms
 ```
 

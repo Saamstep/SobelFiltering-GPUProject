@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+
+if(NOT DEFINED SOBEL_CUDA_ARCHITECTURES)
+    # This workspace is currently running on an RTX 5080 (SM 12.0). Defaulting to
+    # native SASS for that GPU avoids PTX JIT failures when the installed driver
+    # lags the CUDA toolkit version.
+    set(SOBEL_CUDA_ARCHITECTURES "120-real" CACHE STRING "CUDA architectures for sobel_gpu")
+endif()
+
 project(SobelProject VERSION 1.0 LANGUAGES CXX CUDA)
 
 # -----------------------------
@@ -6,10 +14,6 @@ project(SobelProject VERSION 1.0 LANGUAGES CXX CUDA)
 # -----------------------------
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
-endif()
 
 # -----------------------------
 # Find OpenCV
@@ -44,28 +48,7 @@ function(copy_opencv_runtime_dlls target_name)
 endfunction()
 
 # -----------------------------
-# CPU-only target
-# -----------------------------
-add_executable(sobel_cpu
-    main.cpp
-    # CPU Sobel does not call CUDA
-)
-
-target_include_directories(sobel_cpu
-    PRIVATE ${OpenCV_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(sobel_cpu PRIVATE ${OpenCV_LIBS})
-
-if(MSVC)
-    target_compile_options(sobel_cpu PRIVATE /O2 /Oi)
-else()
-    target_compile_options(sobel_cpu PRIVATE -O3 -march=native)
-endif()
-
-copy_opencv_runtime_dlls(sobel_cpu)
-
-# -----------------------------
-# CUDA target (optional)
+# CUDA target
 # -----------------------------
 if(WIN32)
     enable_language(CUDA)
@@ -81,7 +64,13 @@ if(WIN32)
     )
 
     target_link_libraries(sobel_gpu PRIVATE ${OpenCV_LIBS} CUDA::cudart)
-    target_compile_definitions(sobel_gpu PRIVATE SOBEL_ENABLE_CUDA=1)
+
+    if(MSVC)
+        target_compile_options(sobel_gpu PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:/O2 /Oi /Zc:preprocessor>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+        )
+    endif()
 
     if(CUDA_cudart_LIBRARY)
         get_filename_component(_cuda_lib_dir "${CUDA_cudart_LIBRARY}" DIRECTORY)
@@ -93,6 +82,7 @@ if(WIN32)
     set_target_properties(sobel_gpu PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
+        CUDA_ARCHITECTURES "${SOBEL_CUDA_ARCHITECTURES}"
     )
 
     copy_opencv_runtime_dlls(sobel_gpu)

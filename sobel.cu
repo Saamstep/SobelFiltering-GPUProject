@@ -1,4 +1,3 @@
-#ifdef _WIN32
 #include "sobel.hpp"
 #include <cuda_runtime.h>
 #include <iostream>
@@ -26,8 +25,8 @@ namespace
 * KERNEL FUNCTIONS
   --------------------------------- */
 
-// Simple 1D index for naive kernel
-__global__ void kernel_naive(unsigned char *in, unsigned char *out, int w, int h, int K)
+// Simple 1D index for global kernel
+__global__ void kernel_global(unsigned char *in, unsigned char *out, int w, int h, int K)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -126,47 +125,112 @@ __global__ void kernel_shared(unsigned char *in, unsigned char *out, int w, int 
 }
 
 // Host wrappers
-void SobelProcessor::sobel_cuda_naive(unsigned char *in, unsigned char *out, int w, int h, int K)
+void SobelProcessor::cuda_setup()
+{
+    // Force CUDA runtime/context initialization to get more accurate benchmarked work starts.
+    cuda_assert(cudaFree(nullptr), "cudaFree(0) warm-up");
+    cuda_assert(cudaDeviceSynchronize(), "cuda warm-up sync");
+}
+
+void SobelProcessor::sobel_cuda_global(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTimingBreakdown *timing)
 {
     unsigned char *d_in = nullptr, *d_out = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t e0 = nullptr, e1 = nullptr, e2 = nullptr, e3 = nullptr;
     size_t size = w * h * sizeof(unsigned char);
     cuda_assert(cudaMalloc(&d_in, size), "cudaMalloc(d_in)");
     cuda_assert(cudaMalloc(&d_out, size), "cudaMalloc(d_out)");
+    cuda_assert(cudaStreamCreate(&stream), "cudaStreamCreate");
+    cuda_assert(cudaEventCreate(&e0), "cudaEventCreate(e0)");
+    cuda_assert(cudaEventCreate(&e1), "cudaEventCreate(e1)");
+    cuda_assert(cudaEventCreate(&e2), "cudaEventCreate(e2)");
+    cuda_assert(cudaEventCreate(&e3), "cudaEventCreate(e3)");
 
-    cuda_assert(cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
-    cuda_assert(cudaMemset(d_out, 0, size), "cudaMemset(d_out)");
+    cuda_assert(cudaEventRecord(e0, stream), "cudaEventRecord(e0)");
+    cuda_assert(cudaMemcpyAsync(d_in, in, size, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync H2D");
+    cuda_assert(cudaMemsetAsync(d_out, 0, size, stream), "cudaMemsetAsync(d_out)");
 
-    dim3 block(16, 16);
-    dim3 grid((w + 15) / 16, (h + 15) / 16);
-    kernel_naive<<<grid, block>>>(d_in, d_out, w, h, K);
-    cuda_assert(cudaGetLastError(), "sobel_kernel_naive launch");
-    cuda_assert(cudaDeviceSynchronize(), "sobel_kernel_naive sync");
+    dim3 block(block_x, block_y);
+    dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
 
-    cuda_assert(cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
+    cuda_assert(cudaEventRecord(e1, stream), "cudaEventRecord(e1)");
+    kernel_global<<<grid, block, 0, stream>>>(d_in, d_out, w, h, K);
+    cuda_assert(cudaGetLastError(), "sobel_kernel_global launch");
+    cuda_assert(cudaEventRecord(e2, stream), "cudaEventRecord(e2)");
+    cuda_assert(cudaMemcpyAsync(out, d_out, size, cudaMemcpyDeviceToHost, stream), "cudaMemcpyAsync D2H");
+    cuda_assert(cudaEventRecord(e3, stream), "cudaEventRecord(e3)");
+    cuda_assert(cudaEventSynchronize(e3), "cudaEventSynchronize(e3)");
+
+    float h2d_ms = 0.0f;
+    float kernel_ms = 0.0f;
+    float d2h_ms = 0.0f;
+    cuda_assert(cudaEventElapsedTime(&h2d_ms, e0, e1), "cudaEventElapsedTime H2D");
+    cuda_assert(cudaEventElapsedTime(&kernel_ms, e1, e2), "cudaEventElapsedTime kernel");
+    cuda_assert(cudaEventElapsedTime(&d2h_ms, e2, e3), "cudaEventElapsedTime D2H");
+    if (timing != nullptr)
+    {
+        timing->h2d_ms = h2d_ms;
+        timing->kernel_ms = kernel_ms;
+        timing->d2h_ms = d2h_ms;
+    }
+
+    cudaEventDestroy(e0);
+    cudaEventDestroy(e1);
+    cudaEventDestroy(e2);
+    cudaEventDestroy(e3);
+    cudaStreamDestroy(stream);
     cudaFree(d_in);
     cudaFree(d_out);
 }
 
-void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K)
+void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTimingBreakdown *timing)
 {
     unsigned char *d_in = nullptr, *d_out = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t e0 = nullptr, e1 = nullptr, e2 = nullptr, e3 = nullptr;
     size_t size = w * h * sizeof(unsigned char);
     cuda_assert(cudaMalloc(&d_in, size), "cudaMalloc(d_in)");
     cuda_assert(cudaMalloc(&d_out, size), "cudaMalloc(d_out)");
+    cuda_assert(cudaStreamCreate(&stream), "cudaStreamCreate");
+    cuda_assert(cudaEventCreate(&e0), "cudaEventCreate(e0)");
+    cuda_assert(cudaEventCreate(&e1), "cudaEventCreate(e1)");
+    cuda_assert(cudaEventCreate(&e2), "cudaEventCreate(e2)");
+    cuda_assert(cudaEventCreate(&e3), "cudaEventCreate(e3)");
 
-    cuda_assert(cudaMemcpy(d_in, in, size, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
-    cuda_assert(cudaMemset(d_out, 0, size), "cudaMemset(d_out)");
+    cuda_assert(cudaEventRecord(e0, stream), "cudaEventRecord(e0)");
+    cuda_assert(cudaMemcpyAsync(d_in, in, size, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync H2D");
+    cuda_assert(cudaMemsetAsync(d_out, 0, size, stream), "cudaMemsetAsync(d_out)");
 
-    dim3 block(16, 16);
-    dim3 grid((w + 15) / 16, (h + 15) / 16);
+    dim3 block(block_x, block_y);
+    dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
     int radius = K / 2;
     size_t shared_mem = (block.x + 2 * radius) * (block.y + 2 * radius) * sizeof(unsigned char);
-    kernel_shared<<<grid, block, shared_mem>>>(d_in, d_out, w, h, K);
+    cuda_assert(cudaEventRecord(e1, stream), "cudaEventRecord(e1)");
+    kernel_shared<<<grid, block, shared_mem, stream>>>(d_in, d_out, w, h, K);
     cuda_assert(cudaGetLastError(), "sobel_kernel_shared launch");
-    cuda_assert(cudaDeviceSynchronize(), "sobel_kernel_shared sync");
+    cuda_assert(cudaEventRecord(e2, stream), "cudaEventRecord(e2)");
+    cuda_assert(cudaMemcpyAsync(out, d_out, size, cudaMemcpyDeviceToHost, stream), "cudaMemcpyAsync D2H");
+    cuda_assert(cudaEventRecord(e3, stream), "cudaEventRecord(e3)");
+    cuda_assert(cudaEventSynchronize(e3), "cudaEventSynchronize(e3)");
 
-    cuda_assert(cudaMemcpy(out, d_out, size, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
+    float h2d_ms = 0.0f;
+    float kernel_ms = 0.0f;
+    float d2h_ms = 0.0f;
+    cuda_assert(cudaEventElapsedTime(&h2d_ms, e0, e1), "cudaEventElapsedTime H2D");
+    cuda_assert(cudaEventElapsedTime(&kernel_ms, e1, e2), "cudaEventElapsedTime kernel");
+    cuda_assert(cudaEventElapsedTime(&d2h_ms, e2, e3), "cudaEventElapsedTime D2H");
+    if (timing != nullptr)
+    {
+        timing->h2d_ms = h2d_ms;
+        timing->kernel_ms = kernel_ms;
+        timing->d2h_ms = d2h_ms;
+    }
+
+    cudaEventDestroy(e0);
+    cudaEventDestroy(e1);
+    cudaEventDestroy(e2);
+    cudaEventDestroy(e3);
+    cudaStreamDestroy(stream);
     cudaFree(d_in);
     cudaFree(d_out);
 }
-#endif

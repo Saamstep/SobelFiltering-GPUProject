@@ -6,3 +6,5 @@ build
 *.obj
 *.so
 *.exe
+*.mkv
+*.mp4

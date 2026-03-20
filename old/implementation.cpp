@@ -56,9 +56,9 @@ void SobelProcessor::run_cpu(unsigned char *in, unsigned char *out, int w, int h
     }
 }
 
-void SobelProcessor::run_cuda_naive(unsigned char *in, unsigned char *out, int w, int h)
+void SobelProcessor::run_cuda_global(unsigned char *in, unsigned char *out, int w, int h)
 {
-    // Placeholder for CUDA naive implementation
+    // Placeholder for CUDA global implementation
 }
 
 void SobelProcessor::run_cuda_shared(unsigned char *in, unsigned char *out, int w, int h)

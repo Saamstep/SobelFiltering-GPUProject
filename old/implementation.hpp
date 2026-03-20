@@ -36,7 +36,7 @@ public:
             run_cpu<5>(gray.data, output.data, gray.cols, gray.rows);
             break;
         case Target::CUDA_NAIVE:
-            run_cuda_naive(gray.data, output.data, gray.cols, gray.rows);
+            run_cuda_global(gray.data, output.data, gray.cols, gray.rows);
             break;
         case Target::CUDA_SHARED:
             // Example of window-sized processing
@@ -48,6 +48,6 @@ public:
 
 private:
     void run_cpu(unsigned char *in, unsigned char *out, int w, int h);
-    void run_cuda_naive(unsigned char *in, unsigned char *out, int w, int h);
+    void run_cuda_global(unsigned char *in, unsigned char *out, int w, int h);
     void run_cuda_shared(unsigned char *in, unsigned char *out, int w, int h);
 };
