@@ -124,6 +124,28 @@ __global__ void kernel_shared(unsigned char *in, unsigned char *out, int w, int 
     }
 }
 
+__global__ void kernel_bgr_to_gray(const unsigned char *in, unsigned char *out, int w, int h, int channels)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= w || y >= h)
+        return;
+
+    int gray_idx = y * w + x;
+    if (channels == 1)
+    {
+        out[gray_idx] = in[gray_idx];
+        return;
+    }
+
+    const int color_idx = gray_idx * channels;
+    const unsigned char b = in[color_idx + 0];
+    const unsigned char g = in[color_idx + 1];
+    const unsigned char r = in[color_idx + 2];
+    out[gray_idx] = static_cast<unsigned char>((29 * b + 150 * g + 77 * r + 128) >> 8);
+}
+
 // Host wrappers
 void SobelProcessor::cuda_setup()
 {
@@ -132,7 +154,7 @@ void SobelProcessor::cuda_setup()
     cuda_assert(cudaDeviceSynchronize(), "cuda warm-up sync");
 }
 
-void SobelProcessor::sobel_cuda_global(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTimingBreakdown *timing)
+void SobelProcessor::sobel_cuda_global(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTiming_t *timing)
 {
     unsigned char *d_in = nullptr, *d_out = nullptr;
     cudaStream_t stream = nullptr;
@@ -170,6 +192,7 @@ void SobelProcessor::sobel_cuda_global(unsigned char *in, unsigned char *out, in
     if (timing != nullptr)
     {
         timing->h2d_ms = h2d_ms;
+        timing->grayscale_ms = 0.0f;
         timing->kernel_ms = kernel_ms;
         timing->d2h_ms = d2h_ms;
     }
@@ -183,7 +206,7 @@ void SobelProcessor::sobel_cuda_global(unsigned char *in, unsigned char *out, in
     cudaFree(d_out);
 }
 
-void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTimingBreakdown *timing)
+void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x, int block_y, CudaTiming_t *timing)
 {
     unsigned char *d_in = nullptr, *d_out = nullptr;
     cudaStream_t stream = nullptr;
@@ -222,6 +245,7 @@ void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, in
     if (timing != nullptr)
     {
         timing->h2d_ms = h2d_ms;
+        timing->grayscale_ms = 0.0f;
         timing->kernel_ms = kernel_ms;
         timing->d2h_ms = d2h_ms;
     }
@@ -232,5 +256,137 @@ void SobelProcessor::sobel_cuda_shared(unsigned char *in, unsigned char *out, in
     cudaEventDestroy(e3);
     cudaStreamDestroy(stream);
     cudaFree(d_in);
+    cudaFree(d_out);
+}
+
+void SobelProcessor::sobel_cuda_global_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x, int block_y, CudaTiming_t *timing)
+{
+    unsigned char *d_color = nullptr, *d_gray = nullptr, *d_out = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t e0 = nullptr, e1 = nullptr, e2 = nullptr, e3 = nullptr, e4 = nullptr;
+    const size_t gray_size = static_cast<size_t>(w) * h * sizeof(unsigned char);
+    const size_t color_size = static_cast<size_t>(w) * h * channels * sizeof(unsigned char);
+
+    cuda_assert(cudaMalloc(&d_color, color_size), "cudaMalloc(d_color)");
+    cuda_assert(cudaMalloc(&d_gray, gray_size), "cudaMalloc(d_gray)");
+    cuda_assert(cudaMalloc(&d_out, gray_size), "cudaMalloc(d_out)");
+    cuda_assert(cudaStreamCreate(&stream), "cudaStreamCreate");
+    cuda_assert(cudaEventCreate(&e0), "cudaEventCreate(e0)");
+    cuda_assert(cudaEventCreate(&e1), "cudaEventCreate(e1)");
+    cuda_assert(cudaEventCreate(&e2), "cudaEventCreate(e2)");
+    cuda_assert(cudaEventCreate(&e3), "cudaEventCreate(e3)");
+    cuda_assert(cudaEventCreate(&e4), "cudaEventCreate(e4)");
+
+    dim3 block(block_x, block_y);
+    dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
+
+    cuda_assert(cudaEventRecord(e0, stream), "cudaEventRecord(e0)");
+    cuda_assert(cudaMemcpyAsync(d_color, in, color_size, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync H2D color");
+    cuda_assert(cudaMemsetAsync(d_out, 0, gray_size, stream), "cudaMemsetAsync(d_out)");
+    cuda_assert(cudaEventRecord(e1, stream), "cudaEventRecord(e1)");
+
+    kernel_bgr_to_gray<<<grid, block, 0, stream>>>(d_color, d_gray, w, h, channels);
+    cuda_assert(cudaGetLastError(), "bgr_to_gray launch");
+    cuda_assert(cudaEventRecord(e2, stream), "cudaEventRecord(e2)");
+
+    kernel_global<<<grid, block, 0, stream>>>(d_gray, d_out, w, h, K);
+    cuda_assert(cudaGetLastError(), "sobel_kernel_global launch");
+    cuda_assert(cudaEventRecord(e3, stream), "cudaEventRecord(e3)");
+
+    cuda_assert(cudaMemcpyAsync(out, d_out, gray_size, cudaMemcpyDeviceToHost, stream), "cudaMemcpyAsync D2H");
+    cuda_assert(cudaEventRecord(e4, stream), "cudaEventRecord(e4)");
+    cuda_assert(cudaEventSynchronize(e4), "cudaEventSynchronize(e4)");
+
+    float h2d_ms = 0.0f;
+    float grayscale_ms = 0.0f;
+    float kernel_ms = 0.0f;
+    float d2h_ms = 0.0f;
+    cuda_assert(cudaEventElapsedTime(&h2d_ms, e0, e1), "cudaEventElapsedTime H2D");
+    cuda_assert(cudaEventElapsedTime(&grayscale_ms, e1, e2), "cudaEventElapsedTime grayscale");
+    cuda_assert(cudaEventElapsedTime(&kernel_ms, e2, e3), "cudaEventElapsedTime kernel");
+    cuda_assert(cudaEventElapsedTime(&d2h_ms, e3, e4), "cudaEventElapsedTime D2H");
+    if (timing != nullptr)
+    {
+        timing->h2d_ms = h2d_ms;
+        timing->grayscale_ms = grayscale_ms;
+        timing->kernel_ms = kernel_ms;
+        timing->d2h_ms = d2h_ms;
+    }
+
+    cudaEventDestroy(e0);
+    cudaEventDestroy(e1);
+    cudaEventDestroy(e2);
+    cudaEventDestroy(e3);
+    cudaEventDestroy(e4);
+    cudaStreamDestroy(stream);
+    cudaFree(d_color);
+    cudaFree(d_gray);
+    cudaFree(d_out);
+}
+
+void SobelProcessor::sobel_cuda_shared_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x, int block_y, CudaTiming_t *timing)
+{
+    unsigned char *d_color = nullptr, *d_gray = nullptr, *d_out = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t e0 = nullptr, e1 = nullptr, e2 = nullptr, e3 = nullptr, e4 = nullptr;
+    const size_t gray_size = static_cast<size_t>(w) * h * sizeof(unsigned char);
+    const size_t color_size = static_cast<size_t>(w) * h * channels * sizeof(unsigned char);
+
+    cuda_assert(cudaMalloc(&d_color, color_size), "cudaMalloc(d_color)");
+    cuda_assert(cudaMalloc(&d_gray, gray_size), "cudaMalloc(d_gray)");
+    cuda_assert(cudaMalloc(&d_out, gray_size), "cudaMalloc(d_out)");
+    cuda_assert(cudaStreamCreate(&stream), "cudaStreamCreate");
+    cuda_assert(cudaEventCreate(&e0), "cudaEventCreate(e0)");
+    cuda_assert(cudaEventCreate(&e1), "cudaEventCreate(e1)");
+    cuda_assert(cudaEventCreate(&e2), "cudaEventCreate(e2)");
+    cuda_assert(cudaEventCreate(&e3), "cudaEventCreate(e3)");
+    cuda_assert(cudaEventCreate(&e4), "cudaEventCreate(e4)");
+
+    dim3 block(block_x, block_y);
+    dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
+    const int radius = K / 2;
+    const size_t shared_mem = (block.x + 2 * radius) * (block.y + 2 * radius) * sizeof(unsigned char);
+
+    cuda_assert(cudaEventRecord(e0, stream), "cudaEventRecord(e0)");
+    cuda_assert(cudaMemcpyAsync(d_color, in, color_size, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync H2D color");
+    cuda_assert(cudaMemsetAsync(d_out, 0, gray_size, stream), "cudaMemsetAsync(d_out)");
+    cuda_assert(cudaEventRecord(e1, stream), "cudaEventRecord(e1)");
+
+    kernel_bgr_to_gray<<<grid, block, 0, stream>>>(d_color, d_gray, w, h, channels);
+    cuda_assert(cudaGetLastError(), "bgr_to_gray launch");
+    cuda_assert(cudaEventRecord(e2, stream), "cudaEventRecord(e2)");
+
+    kernel_shared<<<grid, block, shared_mem, stream>>>(d_gray, d_out, w, h, K);
+    cuda_assert(cudaGetLastError(), "sobel_kernel_shared launch");
+    cuda_assert(cudaEventRecord(e3, stream), "cudaEventRecord(e3)");
+
+    cuda_assert(cudaMemcpyAsync(out, d_out, gray_size, cudaMemcpyDeviceToHost, stream), "cudaMemcpyAsync D2H");
+    cuda_assert(cudaEventRecord(e4, stream), "cudaEventRecord(e4)");
+    cuda_assert(cudaEventSynchronize(e4), "cudaEventSynchronize(e4)");
+
+    float h2d_ms = 0.0f;
+    float grayscale_ms = 0.0f;
+    float kernel_ms = 0.0f;
+    float d2h_ms = 0.0f;
+    cuda_assert(cudaEventElapsedTime(&h2d_ms, e0, e1), "cudaEventElapsedTime H2D");
+    cuda_assert(cudaEventElapsedTime(&grayscale_ms, e1, e2), "cudaEventElapsedTime grayscale");
+    cuda_assert(cudaEventElapsedTime(&kernel_ms, e2, e3), "cudaEventElapsedTime kernel");
+    cuda_assert(cudaEventElapsedTime(&d2h_ms, e3, e4), "cudaEventElapsedTime D2H");
+    if (timing != nullptr)
+    {
+        timing->h2d_ms = h2d_ms;
+        timing->grayscale_ms = grayscale_ms;
+        timing->kernel_ms = kernel_ms;
+        timing->d2h_ms = d2h_ms;
+    }
+
+    cudaEventDestroy(e0);
+    cudaEventDestroy(e1);
+    cudaEventDestroy(e2);
+    cudaEventDestroy(e3);
+    cudaEventDestroy(e4);
+    cudaStreamDestroy(stream);
+    cudaFree(d_color);
+    cudaFree(d_gray);
     cudaFree(d_out);
 }

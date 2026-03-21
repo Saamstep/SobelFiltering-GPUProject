@@ -31,9 +31,10 @@ struct SobelKernel<5>
         {2, 2, 4, 2, 2}};
 };
 
-struct CudaTimingBreakdown
+struct CudaTiming_t
 {
     float h2d_ms = 0.0f;
+    float grayscale_ms = 0.0f;
     float kernel_ms = 0.0f;
     float d2h_ms = 0.0f;
 };
@@ -71,6 +72,8 @@ public:
     }
 
     void cuda_setup();
-    void sobel_cuda_global(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x = 16, int block_y = 16, CudaTimingBreakdown *timing = nullptr);
-    void sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x = 16, int block_y = 16, CudaTimingBreakdown *timing = nullptr);
+    void sobel_cuda_global(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
+    void sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
+    void sobel_cuda_global_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
+    void sobel_cuda_shared_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
 };
