@@ -1,5 +1,6 @@
 #pragma once
 #include <opencv2/opencv.hpp>
+#include <vector>
 
 // Templated Sobel kernels
 template <int K>
@@ -39,6 +40,59 @@ struct CudaTiming_t
     float d2h_ms = 0.0f;
 };
 
+struct CudaPipelineConfig_t
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    int kernel_size = 3;
+    int block_x = 16;
+    int block_y = 16;
+    bool use_shared = false;
+    bool use_gpu_grayscale = false;
+    int ring_depth = 3;
+};
+
+struct CudaPipelineFrameTiming_t
+{
+    int frame_index = -1;
+    double read_decode_ms = 0.0;
+    double cpu_grayscale_ms = 0.0;
+    double host_staging_ms = 0.0;
+    double pipeline_wait_ms = 0.0;
+    double h2d_ms = 0.0;
+    double gpu_grayscale_ms = 0.0;
+    double kernel_ms = 0.0;
+    double d2h_ms = 0.0;
+    double gpu_overhead_ms = 0.0;
+    double total_latency_ms = 0.0;
+};
+
+struct CudaPipelineSlot_t
+{
+    void *stream = nullptr;
+    unsigned char *d_color = nullptr;
+    unsigned char *d_gray = nullptr;
+    unsigned char *d_out = nullptr;
+    unsigned char *h_color = nullptr;
+    unsigned char *h_gray = nullptr;
+    unsigned char *h_out = nullptr;
+    void *event_start = nullptr;
+    void *event_h2d_end = nullptr;
+    void *event_gray_end = nullptr;
+    void *event_kernel_end = nullptr;
+    void *event_d2h_end = nullptr;
+    bool in_flight = false;
+    int frame_index = -1;
+    CudaPipelineFrameTiming_t pending_timing;
+};
+
+struct CudaPipelineContext_t
+{
+    CudaPipelineConfig_t config;
+    std::vector<CudaPipelineSlot_t> slots;
+};
+
 class SobelProcessor
 {
 public:
@@ -76,4 +130,8 @@ public:
     void sobel_cuda_shared(unsigned char *in, unsigned char *out, int w, int h, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
     void sobel_cuda_global_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
     void sobel_cuda_shared_bgr(unsigned char *in, unsigned char *out, int w, int h, int channels, int K, int block_x = 16, int block_y = 16, CudaTiming_t *timing = nullptr);
+    void cuda_pipeline_init(const CudaPipelineConfig_t &config, CudaPipelineContext_t &context);
+    void cuda_pipeline_enqueue(CudaPipelineContext_t &context, int slot_index, const CudaPipelineFrameTiming_t &host_timing);
+    void cuda_pipeline_finalize(CudaPipelineContext_t &context, int slot_index, CudaPipelineFrameTiming_t &timing);
+    void cuda_pipeline_destroy(CudaPipelineContext_t &context);
 };
